@@ -1,11 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { ThreeScene } from './components/ThreeScene';
 import { CharacteristicsPanel } from './components/CharacteristicsPanel';
 import { DialogBubble } from './components/DialogBubble';
-import { MusicPlayer } from './components/MusicPlayer';
+import { Chatbot } from './components/Chatbot';
+
 import { WineRecommendation } from './components/WineRecommendation';
-import { wines } from './data/wines';
+import { wines as staticWines } from './data/wines';
+import type { Wine } from './data/wines';
 import { getTopRecommendations } from './utils/recommendationEngine';
 import type { UserPreferences } from './utils/recommendationEngine';
 
@@ -24,9 +26,75 @@ function App() {
     foodPairing: 'vegetarian',
     mood: 'relaxed'
   });
+  
+  const [allWines, setAllWines] = useState<Wine[]>([]);
+  const [isWinesLoading, setIsWinesLoading] = useState(true);
   const [recommendations, setRecommendations] = useState<ReturnType<typeof getTopRecommendations>>([]);
-  const [isManualControl, setIsManualControl] = useState(false);
-  const [cameraFollows, setCameraFollows] = useState(true);
+  const [dbMode, setDbMode] = useState<'remote' | 'local'>('remote');
+
+  useEffect(() => {
+    fetch('./php/set_db_mode.php')
+      .then(res => res.json())
+      .then(data => setDbMode(data.mode));
+  }, []);
+
+  const toggleDbMode = () => {
+    const newMode = dbMode === 'remote' ? 'local' : 'remote';
+    fetch(`./php/set_db_mode.php?mode=${newMode}`)
+      .then(res => res.json())
+      .then(() => {
+        setDbMode(newMode);
+        window.location.reload();
+      });
+  };
+
+  useEffect(() => {
+    const fetchWines = () => {
+      fetch('./php/get_scenario_wines.php?scenario_id=62')
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.wines) {
+             setAllWines(prev => {
+                if (prev.length === 0) return data.wines;
+                
+                // Smart Diffing: Only update state if either the length changed, 
+                // or if a wine's 'isWinner' status changed.
+                let changed = false;
+                if (prev.length !== data.wines.length) {
+                    changed = true;
+                } else {
+                    for (let i = 0; i < prev.length; i++) {
+                        // Assuming the API always returns wines in the same order. 
+                        // To be safe, look up by ID instead of index.
+                        const newWine = data.wines.find((w: Wine) => w.id === prev[i].id);
+                        if (!newWine || prev[i].isWinner !== newWine.isWinner) {
+                            changed = true;
+                            break;
+                        }
+                    }
+                }
+                
+                return changed ? data.wines : prev;
+             });
+          }
+          setIsWinesLoading(false);
+        })
+        .catch(err => {
+          console.error("Failed to fetch dynamic wines:", err);
+          setAllWines(prev => prev.length ? prev : staticWines);
+          setIsWinesLoading(false);
+        });
+    };
+
+    // Initial Fetch
+    fetchWines();
+
+    // Polling Interval (every 3 seconds)
+    const intervalId = setInterval(fetchWines, 3000);
+    return () => clearInterval(intervalId);
+  }, []);
+
+  const cameraFollows = true;
 
   const dialogContent = {
     welcome: {
@@ -67,7 +135,7 @@ function App() {
       case 'mood': {
         const updatedPrefs = { ...preferences, mood: option.toLowerCase() };
         setPreferences(updatedPrefs);
-        const recs = getTopRecommendations(wines, updatedPrefs, 3);
+        const recs = getTopRecommendations(allWines, updatedPrefs, 3);
         setRecommendations(recs);
         setStage('results');
         break;
@@ -80,8 +148,53 @@ function App() {
 
   return (
     <div className="app-container">
+      {/* Database Toggle */}
+      <div style={{
+        position: 'fixed',
+        top: '20px',
+        right: '20px',
+        zIndex: 1000,
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px'
+      }}>
+        <span style={{ color: 'white', fontSize: '12px', opacity: 0.7, fontFamily: 'Inter, sans-serif' }}>
+          Server: {dbMode === 'remote' ? '93.240.31.32' : 'Localhost'}
+        </span>
+        <button
+          onClick={toggleDbMode}
+          style={{
+            background: dbMode === 'remote' ? 'rgba(212, 175, 55, 0.2)' : 'rgba(76, 175, 80, 0.2)',
+            border: `1px solid ${dbMode === 'remote' ? '#d4af37' : '#4caf50'}`,
+            color: dbMode === 'remote' ? '#d4af37' : '#4caf50',
+            padding: '6px 12px',
+            borderRadius: '20px',
+            fontSize: '12px',
+            cursor: 'pointer',
+            transition: 'all 0.3s ease',
+            fontFamily: 'Inter, sans-serif'
+          }}
+        >
+          Switch to {dbMode === 'remote' ? 'Local' : 'Remote'}
+        </button>
+      </div>
+
+      {/* Loading State */}
+      <AnimatePresence>
+        {isWinesLoading && (
+          <div style={{
+            position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+            background: '#120c0a', zIndex: 9999, display: 'flex',
+            alignItems: 'center', justifyContent: 'center', color: '#d4af37',
+            fontFamily: 'Inter, sans-serif', fontSize: '20px'
+          }}>
+            Preparing the Cellar...
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* 3D Background */}
-      <ThreeScene recommendedWineId={recommendations[0]?.wine.id} manualControl={isManualControl} cameraFollows={cameraFollows} />
+      {!isWinesLoading && <ThreeScene cameraFollows={cameraFollows} wines={allWines} />}
 
       {/* UI Overlays */}
       <CharacteristicsPanel
@@ -102,114 +215,12 @@ function App() {
         onSelect={handleDialogOption}
       />
 
-      <MusicPlayer />
 
-      {/* Controls Overlay */}
-      <div style={{
-        position: 'fixed',
-        top: '20px',
-        left: '20px',
-        zIndex: 1000,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '10px'
-      }}>
-        {/* Manual Control Toggle */}
-        <button
-          onClick={() => setIsManualControl(!isManualControl)}
-          style={{
-            padding: '10px 20px',
-            background: isManualControl ? 'var(--color-gold)' : 'rgba(255, 255, 255, 0.1)',
-            color: isManualControl ? '#000' : '#fff',
-            border: '1px solid rgba(255, 255, 255, 0.2)',
-            borderRadius: 'var(--radius-md)',
-            cursor: 'pointer',
-            backdropFilter: 'blur(10px)',
-            fontWeight: 600,
-            transition: 'all 0.3s ease'
-          }}
-        >
-          {isManualControl ? 'Disable Manual Control' : 'Enable Manual Control'}
-        </button>
 
-        {isManualControl && (
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '8px'
-          }}>
-            <div style={{
-              padding: '10px',
-              background: 'rgba(0, 0, 0, 0.6)',
-              borderRadius: 'var(--radius-md)',
-              color: '#ccc',
-              fontSize: '0.8rem',
-              backdropFilter: 'blur(10px)'
-            }}>
-              Use WASD/Arrows to move<br />
-              Use Touchpad swipe to strafe
-            </div>
 
-            {/* On-screen Strafe Buttons */}
-            <div style={{ display: 'flex', gap: '5px' }}>
-              <button
-                onMouseDown={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q' }))}
-                onMouseUp={() => window.dispatchEvent(new KeyboardEvent('keyup', { key: 'q' }))}
-                onTouchStart={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q' }))}
-                onTouchEnd={() => window.dispatchEvent(new KeyboardEvent('keyup', { key: 'q' }))}
-                style={{
-                  flex: 1,
-                  padding: '8px',
-                  background: 'rgba(255, 255, 255, 0.1)',
-                  border: '1px solid rgba(255, 255, 255, 0.2)',
-                  borderRadius: '4px',
-                  color: 'white',
-                  cursor: 'pointer'
-                }}
-              >
-                ← Strafe
-              </button>
-              <button
-                onMouseDown={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'e' }))}
-                onMouseUp={() => window.dispatchEvent(new KeyboardEvent('keyup', { key: 'e' }))}
-                onTouchStart={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'e' }))}
-                onTouchEnd={() => window.dispatchEvent(new KeyboardEvent('keyup', { key: 'e' }))}
-                style={{
-                  flex: 1,
-                  padding: '8px',
-                  background: 'rgba(255, 255, 255, 0.1)',
-                  border: '1px solid rgba(255, 255, 255, 0.2)',
-                  borderRadius: '4px',
-                  color: 'white',
-                  cursor: 'pointer'
-                }}
-              >
-                Strafe →
-              </button>
-            </div>
-          </div>
-        )}
 
-        {/* Camera Follow Toggle */}
-        <button
-          onClick={() => setCameraFollows(!cameraFollows)}
-          style={{
-            padding: '10px 20px',
-            background: cameraFollows ? 'rgba(255, 255, 255, 0.1)' : 'var(--color-gold)', // Inverted logic for visual: Gold when Free Cam? Or Gold when Locked? Let's say Gold when Locked (Follows)
-            // Actually, usually "active" means ON. So Camera Follows ON = Gold.
-            background: cameraFollows ? 'var(--color-gold)' : 'rgba(255, 255, 255, 0.1)',
-            color: cameraFollows ? '#000' : '#fff',
-            border: '1px solid rgba(255, 255, 255, 0.2)',
-            borderRadius: 'var(--radius-md)',
-            cursor: 'pointer',
-            backdropFilter: 'blur(10px)',
-            fontWeight: 600,
-            transition: 'all 0.3s ease'
-          }}
-        >
-          {cameraFollows ? 'Camera Locked' : 'Free Camera'}
-        </button>
-      </div>
+      {/* Wine Sommelier Chatbot — always accessible in the bottom-right corner */}
+      <Chatbot />
 
       <AnimatePresence>
         {stage === 'results' && (

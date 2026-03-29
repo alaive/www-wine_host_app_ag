@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "sync-php": "cp -r public/php/. dist/php/",
+    "postbuild": "npm run sync-php",
     "lint": "eslint .",
     "preview": "vite preview"
   },

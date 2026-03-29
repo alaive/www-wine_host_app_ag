@@ -1,9 +1,8 @@
-import { Box, useTexture } from '@react-three/drei';
+import { useMemo } from 'react';
+import { useTexture, Text } from '@react-three/drei';
 import { WineBottle } from './WineBottle';
-import { CandleLight } from './CandleLight';
 import type { Wine } from '../data/wines';
 import * as THREE from 'three';
-import { useEffect } from 'react';
 
 interface WineShelfProps {
     position: [number, number, number];
@@ -12,7 +11,9 @@ interface WineShelfProps {
     height: number;
     depth: number;
     wines?: Wine[];
-    recommendedWineId?: string;
+    label?: string;
+    highlightedIndex?: number;
+    onWineClick?: (wine: Wine) => void;
 }
 
 export const WineShelf = ({
@@ -22,79 +23,107 @@ export const WineShelf = ({
     height,
     depth,
     wines = [],
-    recommendedWineId,
+    label,
+    highlightedIndex = -1,
+    onWineClick
 }: WineShelfProps) => {
-    const shelfCount = 5;
-    const spacing = height / shelfCount;
+    // 4 levels as requested
+    const shelfCount = 4;
     const shelfThickness = 0.05;
 
-    const woodTexture = useTexture('/images/textures/wood_diffuse.png');
-    useEffect(() => {
-        // Configure texture
-        // eslint-disable-next-line
-        woodTexture.wrapS = woodTexture.wrapT = THREE.RepeatWrapping;
-        woodTexture.repeat.set(1, 1);
-        woodTexture.needsUpdate = true;
-    }, [woodTexture]);
+    // Total height available for shelves is 'height'. 
+    // Spacing covers distance between shelf floors.
+    const spacing = height / shelfCount;
 
-    // Max bottles per shelf based on width
-    const bottlesPerShelf = Math.floor((width - 0.2) / 0.15);
+    // Used for calculating bottle positions
+    // Width ~2.2m. Bottle ~0.15m width. 
+    // We want 4 per level centered.
+    const bottlesPerLevel = 4;
+    const bottleSpacing = 0.4; // Spacious placement
 
-    // Distribute wines across shelves
-    // We just iterate linearly through sorted wines
+    const woodTexture = useTexture('./images/textures/wood_diffuse.png');
+    
+    // Optimization: Memoize materials and geometries to share them and avoid re-renders
+    const shelfMaterial = useMemo(() => new THREE.MeshStandardMaterial({ 
+        map: woodTexture, 
+        roughness: 0.7, 
+        color: "#5c4033" 
+    }), [woodTexture]);
+
+    const backboardMaterial = useMemo(() => new THREE.MeshStandardMaterial({ 
+        map: woodTexture, 
+        roughness: 0.8, 
+        color: "#4a3020" 
+    }), [woodTexture]);
+
+    const shelfGeo = useMemo(() => new THREE.BoxGeometry(width, shelfThickness, depth), [width, depth]);
+    const supportGeo = useMemo(() => new THREE.BoxGeometry(0.08, height + 0.2, depth), [height, depth]);
+    const backboardGeo = useMemo(() => new THREE.BoxGeometry(width, height + 0.2, 0.02), [width, height]);
 
     return (
         <group position={position} rotation={rotation}>
+            {/* Shelf Label */}
+            {label && (
+                <Text
+                    position={[0, height + 0.3, 0]}
+                    fontSize={0.25}
+                    color="#f0e6d2"
+                    anchorX="center"
+                    anchorY="middle"
+                >
+                    {label}
+                </Text>
+            )}
+
             {/* Shelves Structure */}
             {Array.from({ length: shelfCount }).map((_, i) => (
-                <group key={`shelf-${i}`} position={[0, i * spacing, 0]}>
-                    <Box args={[width, shelfThickness, depth]} position={[0, 0, 0]}>
-                        <meshStandardMaterial map={woodTexture} roughness={0.7} color="#5c4033" />
-                    </Box>
-                    {/* Add Candles to the top shelf */}
-                    {i === shelfCount - 1 && (
-                        <>
-                            <group position={[-width / 3, 0.1, 0]}>
-                                <CandleLight position={[0, 0, 0]} />
-                            </group>
-                            <group position={[width / 3, 0.1, 0]}>
-                                <CandleLight position={[0, 0, 0]} />
-                            </group>
-                        </>
-                    )}
-                </group>
+                <mesh 
+                    key={`shelf-${i}`} 
+                    geometry={shelfGeo} 
+                    material={shelfMaterial} 
+                    position={[0, i * spacing + 0.2, 0]} 
+                />
             ))}
 
-            {/* Vertical Supports */}
-            <Box args={[0.05, height, depth]} position={[-width / 2 + 0.025, height / 2 - spacing / 2, 0]}>
-                <meshStandardMaterial map={woodTexture} roughness={0.7} color="#5c4033" />
-            </Box>
-            <Box args={[0.05, height, depth]} position={[width / 2 - 0.025, height / 2 - spacing / 2, 0]}>
-                <meshStandardMaterial map={woodTexture} roughness={0.7} color="#5c4033" />
-            </Box>
+            {/* Vertical Supports (Left/Right) */}
+            <mesh 
+                geometry={supportGeo} 
+                material={shelfMaterial} 
+                position={[-width / 2 + 0.04, height / 2, 0]} 
+            />
+            <mesh 
+                geometry={supportGeo} 
+                material={shelfMaterial} 
+                position={[width / 2 - 0.04, height / 2, 0]} 
+            />
+
+            {/* Backboard */}
+            <mesh 
+                geometry={backboardGeo} 
+                material={backboardMaterial} 
+                position={[0, height / 2, -depth / 2]} 
+            />
 
             {/* Bottles */}
             {wines.map((wine, index) => {
-                const shelfIndex = Math.floor(index / bottlesPerShelf) % shelfCount;
-                const slotIndex = index % bottlesPerShelf;
+                const level = Math.floor(index / bottlesPerLevel);
+                if (level >= shelfCount) return null;
 
-                // Calculate position relative to shelf center
-                // Start from left (-width/2) + padding
-                const startX = -width / 2 + 0.15;
-                const xPos = startX + slotIndex * 0.15;
-                const yPos = (shelfIndex * spacing) + (shelfThickness / 2);
-                const zPos = 0; // Center of shelf depth
+                const col = index % bottlesPerLevel;
+                const xPos = (col - (bottlesPerLevel - 1) / 2) * bottleSpacing;
+                const bottleHeight = 0.6;
+                const yPos = (level * spacing) + 0.2 + (shelfThickness / 2) + (bottleHeight / 2);
+                const zPos = 0;
 
-                // Calculate World Position approximation for the avatar to know
-                // The Shelf group is at `position`, so bottle is at `position` + `localPos`
-                // We'll just render it locally here
+                const isSelected = highlightedIndex === index;
 
                 return (
                     <WineBottle
                         key={wine.id}
                         wine={wine}
                         position={[xPos, yPos, zPos]}
-                        isRecommended={recommendedWineId === wine.id}
+                        isRecommended={isSelected}
+                        onClick={onWineClick}
                     />
                 );
             })}
